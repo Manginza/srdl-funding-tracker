@@ -145,6 +145,61 @@ export interface FundBalance {
   closing: number
 }
 
+// ---------------------------------------------------------------------------
+// Cash Requisition & Approval Workflow
+// ---------------------------------------------------------------------------
+// NOTE: This app currently persists to the browser (IndexedDB) and has no
+// server-side auth. The types below mirror the intended Supabase schema so the
+// data layer can be swapped to Supabase later without reshaping the UI. "User"
+// identity is simulated via a local role/user switcher (see src/lib/currentUser).
+
+export type RequisitionStatus = 'pending' | 'authorised' | 'declined'
+export type AppRole = 'requester' | 'authoriser' | 'admin'
+export type RequisitionAuditAction =
+  | 'created'
+  | 'authorised'
+  | 'declined'
+  | 'edited'
+  | 'pdf_exported'
+
+export interface AppUser {
+  id: string
+  name: string
+  title: string | null
+  roles: AppRole[]
+}
+
+export interface Requisition {
+  id: string
+  requisition_no: string        // CWR-{YYYY}-{seq:03d}
+  date_of_withdrawal: string    // ISO date
+  amount: number
+  purpose: string
+  category: string
+  bank_account: string
+  status: RequisitionStatus
+  requested_by: string          // AppUser id
+  requested_by_name: string
+  requested_at: string
+  authorised_by: string | null
+  authorised_by_name: string | null
+  authorised_at: string | null
+  decline_reason: string | null
+  linked_transaction_id: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface RequisitionAudit {
+  id: string
+  requisition_id: string
+  action: RequisitionAuditAction
+  actor_id: string
+  actor_name: string
+  detail: string | null
+  created_at: string
+}
+
 export interface Database {
   public: {
     Tables: {

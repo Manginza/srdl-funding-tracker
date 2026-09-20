@@ -6,7 +6,7 @@ import { ArrowLeft, Camera, Paperclip, X, ShieldAlert, AlertTriangle, Info } fro
 import imageCompression from 'browser-image-compression'
 import { store } from '@/lib/store'
 import { formatCurrency, todayISO } from '@/lib/format'
-import type { Transaction, Funder, Grant, BudgetLine, Category, Supplier, Attachment, AttachmentKind } from '@/types/database'
+import type { Transaction, Funder, Grant, BudgetLine, Category, Supplier, Attachment, AttachmentKind, PaymentMethod } from '@/types/database'
 
 const schema = z.object({
   txn_date: z.string().min(1, 'Date is required'),
@@ -161,7 +161,7 @@ export default function TransactionForm({ transaction, onSaved, onCancel }: Prop
           budget_line_id: data.budget_line_id || undefined,
           category_id: data.category_id || undefined,
           supplier_id: data.supplier_id || undefined,
-          payment_method: (data.payment_method || undefined) as Transaction['payment_method'],
+          payment_method: (data.payment_method || undefined) as PaymentMethod | undefined,
         })
         txnId = txn.id
       }

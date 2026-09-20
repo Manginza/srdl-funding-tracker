@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Plus, Trash2 } from 'lucide-react'
+import { Plus } from 'lucide-react'
 import { store } from '@/lib/store'
 import Badge from '@/components/ui/Badge'
 import type { Category, Supplier } from '@/types/database'

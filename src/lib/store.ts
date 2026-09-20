@@ -3,6 +3,7 @@ import type {
   Funder, Grant, BudgetLine, Tranche, Category, Supplier,
   Transaction, Attachment, ComplianceFlag, Direction, TxnStatus,
   PaymentMethod, AttachmentKind, FundingType, BudgetLineType, FlagSeverity,
+  Requisition, RequisitionAudit, RequisitionStatus, RequisitionAuditAction, AppUser,
 } from '@/types/database'
 
 interface FundingTrackerDB extends DBSchema {
@@ -16,45 +17,58 @@ interface FundingTrackerDB extends DBSchema {
   attachments: { key: string; value: Attachment & { blob?: Blob }; indexes: { 'by-transaction': string } }
   compliance_flags: { key: string; value: ComplianceFlag; indexes: { 'by-transaction': string } }
   pending_sync: { key: string; value: { id: string; table: string; data: unknown; created_at: string } }
+  requisitions: { key: string; value: Requisition; indexes: { 'by-status': string; 'by-requester': string } }
+  requisition_audit: { key: string; value: RequisitionAudit; indexes: { 'by-requisition': string } }
 }
 
 let dbInstance: IDBPDatabase<FundingTrackerDB> | null = null
 
 async function getDB() {
   if (dbInstance) return dbInstance
-  dbInstance = await openDB<FundingTrackerDB>('funding-tracker', 1, {
-    upgrade(db) {
-      const funders = db.createObjectStore('funders', { keyPath: 'id' })
-      funders.createIndex('by-org', 'org_id')
+  dbInstance = await openDB<FundingTrackerDB>('funding-tracker', 2, {
+    upgrade(db, oldVersion) {
+      if (oldVersion < 1) {
+        const funders = db.createObjectStore('funders', { keyPath: 'id' })
+        funders.createIndex('by-org', 'org_id')
 
-      const grants = db.createObjectStore('grants', { keyPath: 'id' })
-      grants.createIndex('by-org', 'org_id')
-      grants.createIndex('by-funder', 'funder_id')
+        const grants = db.createObjectStore('grants', { keyPath: 'id' })
+        grants.createIndex('by-org', 'org_id')
+        grants.createIndex('by-funder', 'funder_id')
 
-      const bl = db.createObjectStore('budget_lines', { keyPath: 'id' })
-      bl.createIndex('by-grant', 'grant_id')
+        const bl = db.createObjectStore('budget_lines', { keyPath: 'id' })
+        bl.createIndex('by-grant', 'grant_id')
 
-      const tr = db.createObjectStore('tranches', { keyPath: 'id' })
-      tr.createIndex('by-grant', 'grant_id')
+        const tr = db.createObjectStore('tranches', { keyPath: 'id' })
+        tr.createIndex('by-grant', 'grant_id')
 
-      const cat = db.createObjectStore('categories', { keyPath: 'id' })
-      cat.createIndex('by-org', 'org_id')
+        const cat = db.createObjectStore('categories', { keyPath: 'id' })
+        cat.createIndex('by-org', 'org_id')
 
-      const sup = db.createObjectStore('suppliers', { keyPath: 'id' })
-      sup.createIndex('by-org', 'org_id')
+        const sup = db.createObjectStore('suppliers', { keyPath: 'id' })
+        sup.createIndex('by-org', 'org_id')
 
-      const txn = db.createObjectStore('transactions', { keyPath: 'id' })
-      txn.createIndex('by-org', 'org_id')
-      txn.createIndex('by-funder', 'funder_id')
-      txn.createIndex('by-grant', 'grant_id')
+        const txn = db.createObjectStore('transactions', { keyPath: 'id' })
+        txn.createIndex('by-org', 'org_id')
+        txn.createIndex('by-funder', 'funder_id')
+        txn.createIndex('by-grant', 'grant_id')
 
-      const att = db.createObjectStore('attachments', { keyPath: 'id' })
-      att.createIndex('by-transaction', 'transaction_id')
+        const att = db.createObjectStore('attachments', { keyPath: 'id' })
+        att.createIndex('by-transaction', 'transaction_id')
 
-      const flags = db.createObjectStore('compliance_flags', { keyPath: 'id' })
-      flags.createIndex('by-transaction', 'transaction_id')
+        const flags = db.createObjectStore('compliance_flags', { keyPath: 'id' })
+        flags.createIndex('by-transaction', 'transaction_id')
 
-      db.createObjectStore('pending_sync', { keyPath: 'id' })
+        db.createObjectStore('pending_sync', { keyPath: 'id' })
+      }
+
+      if (oldVersion < 2) {
+        const req = db.createObjectStore('requisitions', { keyPath: 'id' })
+        req.createIndex('by-status', 'status')
+        req.createIndex('by-requester', 'requested_by')
+
+        const reqAudit = db.createObjectStore('requisition_audit', { keyPath: 'id' })
+        reqAudit.createIndex('by-requisition', 'requisition_id')
+      }
     },
   })
   return dbInstance
@@ -71,6 +85,106 @@ function now(): string {
 const ORG_ID = 'default-org'
 
 export const store = {
+  // Requisitions (Cash Requisition & Approval Workflow)
+  async getRequisitions(filters?: { status?: RequisitionStatus; requestedBy?: string; from?: string; to?: string }): Promise<Requisition[]> {
+    const db = await getDB()
+    let reqs = await db.getAll('requisitions')
+    if (filters?.status) reqs = reqs.filter(r => r.status === filters.status)
+    if (filters?.requestedBy) reqs = reqs.filter(r => r.requested_by === filters.requestedBy)
+    if (filters?.from) reqs = reqs.filter(r => r.date_of_withdrawal >= filters.from!)
+    if (filters?.to) reqs = reqs.filter(r => r.date_of_withdrawal <= filters.to!)
+    return reqs.sort((a, b) => b.requested_at.localeCompare(a.requested_at))
+  },
+  async getRequisition(id: string): Promise<Requisition | undefined> {
+    const db = await getDB()
+    return db.get('requisitions', id)
+  },
+  async getRequisitionAudit(requisitionId: string): Promise<RequisitionAudit[]> {
+    const db = await getDB()
+    const rows = await db.getAllFromIndex('requisition_audit', 'by-requisition', requisitionId)
+    return rows.sort((a, b) => a.created_at.localeCompare(b.created_at))
+  },
+  async nextRequisitionNo(year: number): Promise<string> {
+    const db = await getDB()
+    const prefix = `CWR-${year}-`
+    const all = await db.getAll('requisitions')
+    const maxSeq = all
+      .filter(r => r.requisition_no.startsWith(prefix))
+      .reduce((max, r) => {
+        const seq = parseInt(r.requisition_no.slice(prefix.length), 10)
+        return Number.isFinite(seq) && seq > max ? seq : max
+      }, 0)
+    return `${prefix}${String(maxSeq + 1).padStart(3, '0')}`
+  },
+  async createRequisition(
+    data: { date_of_withdrawal: string; amount: number; purpose: string; category: string; bank_account: string },
+    user: AppUser,
+  ): Promise<Requisition> {
+    const db = await getDB()
+    const year = new Date(data.date_of_withdrawal || now()).getFullYear()
+    const req: Requisition = {
+      id: uid(),
+      requisition_no: await this.nextRequisitionNo(year),
+      date_of_withdrawal: data.date_of_withdrawal,
+      amount: data.amount,
+      purpose: data.purpose,
+      category: data.category,
+      bank_account: data.bank_account,
+      status: 'pending',
+      requested_by: user.id,
+      requested_by_name: user.name,
+      requested_at: now(),
+      authorised_by: null,
+      authorised_by_name: null,
+      authorised_at: null,
+      decline_reason: null,
+      linked_transaction_id: null,
+      created_at: now(),
+      updated_at: now(),
+    }
+    await db.put('requisitions', req)
+    await logRequisitionAudit(req.id, 'created', user, `Requisition ${req.requisition_no} created for ${formatMoneyPlain(req.amount)}`)
+    return req
+  },
+  async authoriseRequisition(id: string, user: AppUser): Promise<Requisition> {
+    const db = await getDB()
+    const req = await db.get('requisitions', id)
+    if (!req) throw new Error('Requisition not found')
+    if (req.status !== 'pending') throw new Error('Only pending requisitions can be authorised')
+    const updated: Requisition = {
+      ...req,
+      status: 'authorised',
+      authorised_by: user.id,
+      authorised_by_name: user.name,
+      authorised_at: now(),
+      updated_at: now(),
+    }
+    await db.put('requisitions', updated)
+    await logRequisitionAudit(id, 'authorised', user, `Authorised by ${user.name}`)
+    return updated
+  },
+  async declineRequisition(id: string, reason: string, user: AppUser): Promise<Requisition> {
+    const db = await getDB()
+    const req = await db.get('requisitions', id)
+    if (!req) throw new Error('Requisition not found')
+    if (req.status !== 'pending') throw new Error('Only pending requisitions can be declined')
+    const updated: Requisition = {
+      ...req,
+      status: 'declined',
+      authorised_by: user.id,
+      authorised_by_name: user.name,
+      authorised_at: now(),
+      decline_reason: reason,
+      updated_at: now(),
+    }
+    await db.put('requisitions', updated)
+    await logRequisitionAudit(id, 'declined', user, `Declined by ${user.name}: ${reason}`)
+    return updated
+  },
+  async logRequisitionExport(id: string, user: AppUser, detail: string): Promise<void> {
+    await logRequisitionAudit(id, 'pdf_exported', user, detail)
+  },
+
   // Funders
   async getFunders(): Promise<Funder[]> {
     const db = await getDB()
@@ -184,7 +298,7 @@ export const store = {
     if (filters?.grant_id) txns = txns.filter(t => t.grant_id === filters.grant_id)
     if (filters?.status) txns = txns.filter(t => t.status === filters.status)
     if (filters?.direction) txns = txns.filter(t => t.direction === filters.direction)
-    if (filters?.month) txns = txns.filter(t => t.txn_date.startsWith(filters.month))
+    if (filters?.month) { const m = filters.month; txns = txns.filter(t => t.txn_date.startsWith(m)) }
     const funders = await db.getAll('funders')
     const categories = await db.getAll('categories')
     const suppliers = await db.getAll('suppliers')
@@ -319,6 +433,29 @@ export const store = {
     }, 0)
     return { totalIncome, totalExpenditure, balance: totalIncome - totalExpenditure, restrictedBalance, unrestrictedBalance, openBreaches: openFlags.filter(f => f.severity === 'breach').length, openWarnings: openFlags.filter(f => f.severity === 'warning' || f.severity === 'error').length, pendingApproval, totalTransactions: nonVoid.length }
   },
+}
+
+async function logRequisitionAudit(
+  requisitionId: string,
+  action: RequisitionAuditAction,
+  actor: AppUser,
+  detail?: string,
+) {
+  const db = await getDB()
+  const row: RequisitionAudit = {
+    id: uid(),
+    requisition_id: requisitionId,
+    action,
+    actor_id: actor.id,
+    actor_name: actor.name,
+    detail: detail ?? null,
+    created_at: now(),
+  }
+  await db.put('requisition_audit', row)
+}
+
+function formatMoneyPlain(amount: number): string {
+  return `R ${amount.toLocaleString('en-ZA', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
 
 async function runComplianceChecks(txn: Transaction) {

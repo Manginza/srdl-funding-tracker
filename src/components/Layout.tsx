@@ -1,12 +1,14 @@
 import { NavLink, Outlet } from 'react-router-dom'
-import { LayoutDashboard, ArrowLeftRight, Landmark, PiggyBank, ShieldAlert, Settings, Menu, X } from 'lucide-react'
+import { LayoutDashboard, ArrowLeftRight, Landmark, PiggyBank, ShieldAlert, Settings, Menu, X, Receipt } from 'lucide-react'
 import { useState } from 'react'
+import UserSwitcher from '@/components/UserSwitcher'
 
 const navItems = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/transactions', label: 'Transactions', icon: ArrowLeftRight },
   { to: '/grants', label: 'Grants & Funders', icon: Landmark },
   { to: '/balances', label: 'Fund Balances', icon: PiggyBank },
+  { to: '/requisitions', label: 'Cash Requisitions', icon: Receipt },
   { to: '/compliance', label: 'Compliance', icon: ShieldAlert },
   { to: '/settings', label: 'Settings', icon: Settings },
 ]
@@ -42,6 +44,7 @@ export default function Layout() {
             </NavLink>
           ))}
         </nav>
+        <UserSwitcher />
         <div className="p-4 border-t border-gray-200 text-xs text-gray-400">
           Data stored locally in browser
         </div>

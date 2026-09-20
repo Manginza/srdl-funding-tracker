@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Plus, Trash2, ChevronDown, ChevronRight } from 'lucide-react'
 import { store } from '@/lib/store'
-import { formatCurrency, formatDate } from '@/lib/format'
+import { formatCurrency } from '@/lib/format'
 import Badge from '@/components/ui/Badge'
 import type { Funder, Grant, BudgetLine, FundingType, BudgetLineType } from '@/types/database'
 
